@@ -199,3 +199,25 @@ it can be wrong; the questions are checked by hand against the Product Bible.
 
 **Risks and open questions:** Live model calls make the eval slow, cost a few
 cents and occasionally flaky; the pass-rate bar leaves room for that.
+
+## Module 5: one agent vs two agents
+
+**Summary:** The same golden set runs on a single support agent that does
+everything and on the two agents (Copper and the Refund agent), and the two
+runs are compared in Langfuse.
+
+**Components:** `answerWithOneAgent` in `lib/copper/assistant/agents.ts` is one
+agent with `SINGLE_AGENT_INSTRUCTIONS` and every tool (Copper's plus
+`get_orders` and `request_refund`), and no handoff. `evals/run-setup.ts` runs
+the golden set on any setup as one Langfuse dataset run; `evals/compare.eval.ts`
+(`npm run eval:compare`) runs both. Besides `judge_pass` and `judge_score`,
+each question records `tokens`, `seconds` and `tool_calls`, and each run
+records `pass_rate`. Compare in Langfuse under Datasets > copper-golden-set > Runs.
+
+**Decisions and trade-offs:** The comparison doesn't gate CI; only the
+two-agent eval does, since that is the setup that ships. Both use the same
+questions, model, desk and judge, so differences come from the design.
+
+**Risks and open questions:** 15 questions is a small sample and the judge is
+a model, so small gaps are noise; run it more than once before drawing a
+conclusion.
