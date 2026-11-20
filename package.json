@@ -16,7 +16,8 @@
     "start-module": "node scripts/start-module.mjs",
     "env:check": "node scripts/check-env.mjs",
     "embed-docs": "node scripts/embed-docs.mjs",
-    "eval": "vitest run --config vitest.eval.config.mts"
+    "eval": "vitest run --config vitest.eval.config.mts evals/golden.eval.ts",
+    "eval:compare": "vitest run --config vitest.eval.config.mts evals/compare.eval.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "4.0.93",
