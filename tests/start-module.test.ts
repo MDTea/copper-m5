@@ -9,8 +9,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { tempDir } from "./helpers/temp-dir";
+
+// Each test spawns many git and node processes, which is slow on Windows.
+vi.setConfig({ testTimeout: 30_000 });
 
 const script = join(process.cwd(), "scripts/start-module.mjs");
 
