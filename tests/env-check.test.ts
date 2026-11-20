@@ -2,8 +2,11 @@
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { tempDir } from "./helpers/temp-dir";
+
+// Each test starts a Node process, which can be slow on Windows.
+vi.setConfig({ testTimeout: 30_000 });
 
 // Deliberately not shaped like a real provider key, so secret scanners ignore it.
 const KEY = "test-only-not-a-real-key-0123456789wxyz";
