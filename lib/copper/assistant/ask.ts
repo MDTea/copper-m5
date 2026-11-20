@@ -9,24 +9,20 @@
 // talking. Copper can hand the conversation to the Refund agent, a second
 // agent with its own instructions and tools, and the Refund agent can hand it
 // back. The agent that ends the turn answers the next message too.
-import { hasToolCall, stepCountIs } from "ai";
+import { startActiveObservation } from "@langfuse/tracing";
 import { callStream, THOUGHT_SUMMARIES } from "@/lib/ai/call";
 import { createLive, type Live } from "@/lib/ai/live";
+import { flushTraces } from "@/lib/ai/tracing";
 import {
-  COPPER_HANDOFF,
-  COPPER_INSTRUCTIONS,
-  REFUND_AGENT_INSTRUCTIONS,
-} from "@/lib/copper/assistant/instructions";
+  agentCall,
+  HANDOFF_TOOLS,
+  MAX_HANDOFFS,
+} from "@/lib/copper/assistant/agents";
 import type {
   Agent,
   Progress,
   ToolStep,
 } from "@/lib/copper/assistant/progress";
-import {
-  copperTools,
-  refundAgentTools,
-  transferToRefundAgent,
-} from "@/lib/copper/assistant/tools";
 import type { Desk } from "@/lib/copper/orders";
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
@@ -42,53 +38,7 @@ export type AskCopperRequest = {
 
 export type AskCopperResult = { progress: Live<Progress> };
 
-/** At most this many model steps (tool calls plus the reply) per agent. */
-const MAX_STEPS = 5;
-
-/** Copper → Refund agent → Copper at most, so a turn can't bounce forever. */
-const MAX_HANDOFFS = 2;
-
-const HANDOFF_TOOLS: Record<string, Agent> = {
-  transfer_to_refund_agent: "refund",
-  transfer_to_copper: "copper",
-};
-
-// A handoff ends the agent's turn: the other agent answers.
-const STOP = [
-  stepCountIs(MAX_STEPS),
-  hasToolCall("transfer_to_refund_agent", "transfer_to_copper"),
-];
-
 const SORRY = "Sorry, something went wrong on my end. Please try again.";
-
-/** One agent's call: its instructions and only its own tools. */
-function agentCall(agent: Agent, messages: ChatMessage[], desk?: Desk) {
-  if (agent === "refund" && desk)
-    return callStream(
-      { module: 4, feature: "refund-agent" },
-      {
-        messages,
-        providerOptions: THOUGHT_SUMMARIES,
-        instructions: REFUND_AGENT_INSTRUCTIONS,
-        tools: refundAgentTools(desk),
-        stopWhen: STOP,
-      },
-    );
-  return callStream(
-    { module: 2, feature: "ask-copper" },
-    {
-      messages,
-      providerOptions: THOUGHT_SUMMARIES,
-      instructions: desk
-        ? `${COPPER_INSTRUCTIONS}\n\n${COPPER_HANDOFF}`
-        : COPPER_INSTRUCTIONS,
-      tools: desk
-        ? { ...copperTools, transfer_to_refund_agent: transferToRefundAgent }
-        : copperTools,
-      stopWhen: STOP,
-    },
-  );
-}
 
 export async function askCopper({
   messages,
@@ -191,7 +141,10 @@ export async function askCopper({
   }
 
   // Read the stream in the background, so the panel gets the first update now.
-  void (async () => {
+  // The whole turn is one Langfuse trace: each agent's call and tool calls
+  // show up inside it.
+  void startActiveObservation("ask-copper-turn", async (turn) => {
+    turn.update({ input: messages.at(-1)?.content });
     try {
       if (!useTools) {
         // Without tools, send no instructions either: "always use your
@@ -224,8 +177,13 @@ export async function askCopper({
       progress.status = "error";
       if (!progress.reply.trim()) progress.reply = SORRY;
     }
+    turn.update({
+      output: progress.reply,
+      metadata: { agent: progress.agent },
+    });
+    await flushTraces();
     done(snapshot());
-  })();
+  });
 
   return { progress: live };
 }

@@ -51,10 +51,25 @@ export type AiCallRow = {
   created_at: string;
 };
 
+// Google's free tier allows about 15 requests a minute. The golden-set eval
+// sends hundreds in a row, so it sets AI_MIN_INTERVAL_MS to space them out:
+// each request to Google starts at least that many milliseconds after the last.
+// Unset (the normal case), requests go straight through.
+let nextSlot = 0;
+const throttledFetch: typeof fetch = async (input, init) => {
+  const gap = Number(process.env.AI_MIN_INTERVAL_MS ?? 0);
+  if (gap > 0) {
+    const start = Math.max(Date.now(), nextSlot);
+    nextSlot = start + gap;
+    await new Promise((resolve) => setTimeout(resolve, start - Date.now()));
+  }
+  return fetch(input, init);
+};
+
 function google() {
   const googleKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim();
   if (!googleKey) throw new AiNotConfiguredError();
-  return createGoogleGenerativeAI({ apiKey: googleKey });
+  return createGoogleGenerativeAI({ apiKey: googleKey, fetch: throttledFetch });
 }
 
 function languageModel(model: ModelId) {
@@ -69,6 +84,11 @@ function languageModel(model: ModelId) {
 /** Prints one line per model call, so the cost and time are visible. */
 async function logCall(row: AiCallRow): Promise<void> {
   console.info("[ai_calls]", JSON.stringify(row));
+}
+
+/** Names each call in Langfuse (module and feature), e.g. "refund-agent". */
+function traceInfo(info: Omit<CallInfo, "model">) {
+  return { functionId: info.feature };
 }
 
 type Usage = { inputTokens?: number; outputTokens?: number };
@@ -114,7 +134,11 @@ async function tracked<T extends { usage: Usage }>(
 /** Generates text. Example: callText({ module: 3, feature: "support-answer" }, { prompt }) */
 export async function callText(info: CallInfo, options: TextOptions) {
   return tracked(info, (model) =>
-    generateText({ ...options, model: languageModel(model) }),
+    generateText({
+      ...options,
+      model: languageModel(model),
+      telemetry: traceInfo(info),
+    }),
   );
 }
 
@@ -128,6 +152,7 @@ export async function callObject<Schema extends z.ZodType>(
     generateText({
       ...rest,
       model: languageModel(model),
+      telemetry: traceInfo(info),
       output: Output.object({ schema }),
     }),
   );
@@ -162,6 +187,7 @@ export async function callEmbedMany(
     const result = await embedMany({
       model: google().embedding(EMBEDDING_MODEL.slice("google/".length)),
       values,
+      telemetry: traceInfo(info),
       providerOptions: {
         google: { outputDimensionality: EMBEDDING_DIMENSIONS },
       },
@@ -190,6 +216,7 @@ export function callStream(info: CallInfo, options: StreamOptions) {
   return streamText({
     ...options,
     model: languageModel(model),
+    telemetry: traceInfo(info),
     onFinish: ({ totalUsage }) => logCall(row(true, totalUsage)),
     onError: () => logCall(row(false)),
   });

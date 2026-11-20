@@ -171,3 +171,31 @@ the tests and a golden-set evaluation with an AI judge run in GitHub Actions
 on every pull request, with `main` protected; every AI call is traced in
 Langfuse; and one support agent that does everything is compared with the two
 agents on the same golden set. Langfuse is the only eval and monitoring tool.
+
+## Module 5: tracing and the golden-set eval
+
+**Summary:** Every AI call is traced in Langfuse, and a golden set of 15
+questions is graded by an AI judge on every pull request.
+
+**Components:** `instrumentation.ts` and `lib/ai/tracing.ts` start the
+OpenTelemetry link to Langfuse when the `LANGFUSE_*` keys are set (nothing is
+sent without them). Each call in `lib/ai/call.ts` is named after its feature
+(`ask-copper`, `refund-agent`, `search-docs`, `eval-judge`), and each chat turn
+is one `ask-copper-turn` trace holding the agents' calls, tool calls, tokens,
+cost and time. `lib/copper/assistant/agents.ts` holds the two agents' calls,
+shared by the chat and the eval. `evals/golden-set.ts` is the questions and
+what a good reply says; `evals/judge.ts` is the Gemini judge;
+`evals/golden.eval.ts` runs the set as a Langfuse dataset experiment
+(`npm run eval`) and fails below an 80% pass rate. The `eval` job in
+`.github/workflows/ci.yml` runs it with the keys from Actions secrets.
+
+**Data flow:** question → agents (traced) → reply → judge (traced) → scores
+`judge_pass` and `judge_score` per question and `pass_rate` per run, in Langfuse.
+
+**Decisions and trade-offs:** The golden set lives in a Langfuse dataset so
+another setup (one agent) is compared on the same questions. In CI, missing
+keys fail the eval instead of skipping it. The judge is another model call, so
+it can be wrong; the questions are checked by hand against the Product Bible.
+
+**Risks and open questions:** Live model calls make the eval slow, cost a few
+cents and occasionally flaky; the pass-rate bar leaves room for that.
