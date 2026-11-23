@@ -1,8 +1,11 @@
 // The two agents' calls, shared by the Ask Copper chat (ask.ts, which streams
 // them to the panel) and the golden-set evaluation (evals/, which reads the
 // finished answer).
+import { startActiveObservation } from "@langfuse/tracing";
 import { hasToolCall, stepCountIs } from "ai";
 import { callStream, THOUGHT_SUMMARIES } from "@/lib/ai/call";
+import { defaultModel } from "@/lib/ai/models";
+import { costUsd } from "@/lib/ai/pricing";
 import type { ChatMessage } from "@/lib/copper/assistant/ask";
 import {
   COPPER_HANDOFF,
@@ -72,8 +75,15 @@ export type AgentAnswer = {
   tools: string[];
   /** Model tokens used across every call, and how long the answer took. */
   tokens: number;
+  costUsd: number;
   seconds: number;
 };
+
+type Usage = { inputTokens?: number; outputTokens?: number };
+
+/** What one call cost, from the tokens it used and the model's list price. */
+const costOf = (usage: Usage) =>
+  costUsd(defaultModel(), usage.inputTokens ?? 0, usage.outputTokens ?? 0);
 
 /**
  * Asks the two agents one question and waits for the finished answer (no
@@ -90,20 +100,33 @@ export async function answerWithTwoAgents(
     agents: [],
     tools: [],
     tokens: 0,
+    costUsd: 0,
     seconds: 0,
   };
   let current: Agent = "copper";
   for (let handoffs = 0; ; handoffs++) {
-    const result = agentCall(current, messages, desk);
-    answer.reply = await result.text;
-    answer.agents.push(current);
-    answer.tokens += (await result.totalUsage).totalTokens ?? 0;
-    let next: Agent | undefined;
-    for (const step of await result.steps)
-      for (const call of step.toolCalls) {
-        answer.tools.push(call.toolName);
-        if (call.toolName in HANDOFF_TOOLS) next = HANDOFF_TOOLS[call.toolName];
-      }
+    const agent: Agent = current;
+    // Each agent's turn is its own named span in Langfuse.
+    const next: Agent | undefined = await startActiveObservation(
+      `${agent}-agent`,
+      async () => {
+        const result = agentCall(agent, messages, desk);
+        answer.reply = await result.text;
+        answer.agents.push(agent);
+        const usage = await result.totalUsage;
+        answer.tokens += usage.totalTokens ?? 0;
+        answer.costUsd += costOf(usage);
+        let handoff: Agent | undefined;
+        for (const step of await result.steps)
+          for (const call of step.toolCalls) {
+            answer.tools.push(call.toolName);
+            if (call.toolName in HANDOFF_TOOLS)
+              handoff = HANDOFF_TOOLS[call.toolName];
+          }
+        return handoff;
+      },
+      { asType: "agent" },
+    );
     if (!next || next === current || handoffs >= MAX_HANDOFFS) break;
     current = next;
     answer.reply = "";
@@ -135,11 +158,13 @@ export async function answerWithOneAgent(
   const tools = (await result.steps).flatMap((step) =>
     step.toolCalls.map((call) => call.toolName),
   );
+  const usage = await result.totalUsage;
   return {
     reply,
     agents: ["copper"],
     tools,
-    tokens: (await result.totalUsage).totalTokens ?? 0,
+    tokens: usage.totalTokens ?? 0,
+    costUsd: costOf(usage),
     seconds: (performance.now() - started) / 1000,
   };
 }

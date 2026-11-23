@@ -159,9 +159,13 @@ export async function askCopper({
       } else {
         let current = first;
         for (let handoffs = 0; ; handoffs++) {
-          const next = await follow(
-            current,
-            agentCall(current, messages, desk),
+          // Each agent's turn is its own named span in Langfuse, so a trace
+          // shows which agent answered and which tools it used.
+          const agent: Agent = current;
+          const next: Agent | undefined = await startActiveObservation(
+            `${agent}-agent`,
+            () => follow(agent, agentCall(agent, messages, desk)),
+            { asType: "agent" },
           );
           if (!next || next === current || handoffs >= MAX_HANDOFFS) break;
           progress.steps.push({ type: "handoff", from: current, to: next });
