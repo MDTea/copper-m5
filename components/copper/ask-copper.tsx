@@ -62,7 +62,13 @@ export type SupportDesk = {
 };
 
 /** `note`: the question is a Refund Console note, not the customer. */
-type Turn = { question: string; progress: Progress; note?: boolean };
+type Turn = {
+  question: string;
+  progress: Progress;
+  note?: boolean;
+  /** Answered by the single agent (Module 5's comparison), not by two agents. */
+  single?: boolean;
+};
 type Chats = { tools: Turn[]; noTools: Turn[] };
 
 const WORKING: Progress = { steps: [], reply: "", status: "working" };
@@ -80,6 +86,8 @@ export function AskCopper({
 }) {
   const [open, setOpen] = useState(docked);
   const [useTools, setUseTools] = useState(true);
+  // Module 5: one agent with every tool instead of Copper + the Refund agent.
+  const [single, setSingle] = useState(false);
   const [chats, setChats] = useState<Chats>({ tools: [], noTools: [] });
   const [draft, setDraft] = useState("");
   const body = useRef<HTMLDivElement>(null);
@@ -127,6 +135,7 @@ export function AskCopper({
     if (!question || busy) return;
     setDraft("");
     const chat = note ? "tools" : key;
+    const useSingle = Boolean(support) && single && chat === "tools";
     const turns = chats[chat];
     const index = turns.length;
     // Only finished turns go to the model: questions and Copper's replies.
@@ -146,7 +155,10 @@ export function AskCopper({
       }));
     setChats((all) => ({
       ...all,
-      [chat]: [...all[chat], { question, progress: WORKING, note }],
+      [chat]: [
+        ...all[chat],
+        { question, progress: WORKING, note, single: useSingle },
+      ],
     }));
     try {
       const { progress } = await askCopper({
@@ -157,6 +169,7 @@ export function AskCopper({
         ...(support && {
           desk: support.desk,
           agent: note ? "refund" : turns.at(-1)?.progress.agent,
+          setup: useSingle ? "single" : "multi",
         }),
       });
       let last: Progress | undefined;
@@ -213,7 +226,9 @@ export function AskCopper({
                 </SheetTitle>
                 <SheetDescription className="text-xs text-white/70">
                   {support
-                    ? "Copper answers; the Refund agent handles refunds."
+                    ? single
+                      ? "One agent answers everything, refunds too."
+                      : "Copper answers; the Refund agent handles refunds."
                     : "Prices, totals and stock, checked with tools."}
                 </SheetDescription>
               </div>
@@ -243,6 +258,23 @@ export function AskCopper({
                 />
               </div>
             )}
+            {aiConfigured && support && (
+              <div className="flex items-center gap-3 bg-white/10 px-4 py-2">
+                <div className="flex-1 text-sm">
+                  <span className="font-semibold">Single agent</span>
+                  <span className="ml-2 text-xs text-white/70">
+                    {single
+                      ? "One agent, all the tools, no handoff"
+                      : "Copper hands refunds to the Refund agent"}
+                  </span>
+                </div>
+                <Switch
+                  aria-label="Single agent"
+                  checked={single}
+                  onCheckedChange={setSingle}
+                />
+              </div>
+            )}
           </header>
 
           {aiConfigured ? (
@@ -269,6 +301,7 @@ export function AskCopper({
                       progress={turn.progress}
                       useTools={useTools}
                       handoffs={Boolean(support)}
+                      single={turn.single}
                     />
                   </div>
                 ))}
@@ -337,20 +370,28 @@ function Answer({
   progress,
   useTools,
   handoffs = false,
+  single = false,
 }: {
   progress: Progress;
   useTools: boolean;
   /** Copper can hand off to the Refund agent (Support page, Module 4). */
   handoffs?: boolean;
+  /** One agent with every tool and no handoff (Module 5's comparison). */
+  single?: boolean;
 }) {
   const { steps, reply, status } = progress;
   // Who answered first, and who is speaking at each step.
   const first: Agent =
     steps.find((s) => s.type === "handoff")?.from ?? progress.agent ?? "copper";
-  const toolsOf = (agent: Agent) => [
-    ...AGENT_TOOLS[agent],
-    ...(handoffs && agent === "copper" ? ["transfer_to_refund_agent"] : []),
-  ];
+  const toolsOf = (agent: Agent) =>
+    single
+      ? [...AGENT_TOOLS.copper, "get_orders", "request_refund"]
+      : [
+          ...AGENT_TOOLS[agent],
+          ...(handoffs && agent === "copper"
+            ? ["transfer_to_refund_agent"]
+            : []),
+        ];
   const used = new Set(
     steps.filter((s): s is ToolStep => s.type === "tool").map((s) => s.name),
   );

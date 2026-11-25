@@ -144,29 +144,47 @@ export async function answerWithOneAgent(
   desk: Desk,
 ): Promise<AgentAnswer> {
   const started = performance.now();
-  const result = callStream(
+  return startActiveObservation(
+    "single-agent",
+    async () => {
+      const result = singleAgentCall(
+        [{ role: "user", content: question }],
+        desk,
+      );
+      const reply = await result.text;
+      const tools = (await result.steps).flatMap((step) =>
+        step.toolCalls.map((call) => call.toolName),
+      );
+      const usage = await result.totalUsage;
+      return {
+        reply,
+        agents: ["copper"],
+        tools,
+        tokens: usage.totalTokens ?? 0,
+        costUsd: costOf(usage),
+        seconds: (performance.now() - started) / 1000,
+      } satisfies AgentAnswer;
+    },
+    { asType: "agent" },
+  );
+}
+
+/**
+ * The single agent's call: Copper's instructions and tools plus the refund
+ * tools, in one agent. No handoff. Used by the eval and by the Support page's
+ * "Single agent" switch.
+ */
+export function singleAgentCall(messages: ChatMessage[], desk: Desk) {
+  return callStream(
     { module: 5, feature: "single-agent" },
     {
-      messages: [{ role: "user", content: question }],
+      messages,
       providerOptions: THOUGHT_SUMMARIES,
       instructions: SINGLE_AGENT_INSTRUCTIONS,
       tools: { ...copperTools, ...singleAgentRefundTools(desk) },
       stopWhen: stepCountIs(MAX_STEPS),
     },
   );
-  const reply = await result.text;
-  const tools = (await result.steps).flatMap((step) =>
-    step.toolCalls.map((call) => call.toolName),
-  );
-  const usage = await result.totalUsage;
-  return {
-    reply,
-    agents: ["copper"],
-    tools,
-    tokens: usage.totalTokens ?? 0,
-    costUsd: costOf(usage),
-    seconds: (performance.now() - started) / 1000,
-  };
 }
 
 /** The refund tools without the handoff back to Copper. */
