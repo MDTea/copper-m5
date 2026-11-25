@@ -206,6 +206,31 @@ describe("handoff to the Refund agent", () => {
     expect(result.reply).toBe("Copper Home is $149.");
   });
 
+  it("the single-agent setup refunds in one agent: all the tools, no handoff", async () => {
+    model = modelStreaming(
+      calls("request_refund", { orderId: "1004" }),
+      says("A supervisor needs to approve it."),
+    );
+    const result = await ask({
+      messages: [{ role: "user", content: "Refund order #1004" }],
+      useTools: true,
+      desk: desk(50),
+      setup: "single",
+    });
+    expect(result.status).toBe("done");
+    expect(result.steps.some((s) => s.type === "handoff")).toBe(false);
+    expect(toolCallsOf(result)[0].output).toMatchObject({
+      status: "needs_approval",
+    });
+    // One agent ran every call, with Copper's tools and the refund tools.
+    const names = model.doStreamCalls[0].tools?.map((t) => t.name);
+    expect(names).toEqual(
+      expect.arrayContaining(["search_docs", "get_orders", "request_refund"]),
+    );
+    expect(names).not.toContain("transfer_to_refund_agent");
+    expect(names).not.toContain("transfer_to_copper");
+  });
+
   it("off the Support page, Copper has no handoff tool", async () => {
     model = modelStreaming(says("Copper Home is $149."));
     await ask({
@@ -230,6 +255,8 @@ describe("Refund Console", () => {
       ),
     ).toBeVisible();
     expect(screen.getByText("Maya Reyes's orders")).toBeVisible();
+    // Module 5: the chat can switch to one agent with every tool.
+    expect(screen.getByRole("switch", { name: "Single agent" })).toBeVisible();
     const orders = screen.getAllByTestId("order");
     expect(orders).toHaveLength(4);
     expect(within(orders[3]).getByText("Copper Home")).toBeVisible();

@@ -221,3 +221,9 @@ questions, model, desk and judge, so differences come from the design.
 **Risks and open questions:** 15 questions is a small sample and the judge is
 a model, so small gaps are noise; run it more than once before drawing a
 conclusion.
+
+**Single-agent switch:** The Support page's chat has a "Single agent" switch.
+On, `askCopper` is called with `setup: "single"` and runs `singleAgentCall`
+(`lib/copper/assistant/agents.ts`): one agent with Copper's tools plus
+`get_orders` and `request_refund`, and no handoff. In Langfuse its turn is a
+`single-agent` span, where the default is `copper-agent` then `refund-agent`.

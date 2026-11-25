@@ -17,6 +17,7 @@ import {
   agentCall,
   HANDOFF_TOOLS,
   MAX_HANDOFFS,
+  singleAgentCall,
 } from "@/lib/copper/assistant/agents";
 import type {
   Agent,
@@ -34,6 +35,11 @@ export type AskCopperRequest = {
   desk?: Desk;
   /** Who answers first: whoever ended the last turn. Copper by default. */
   agent?: Agent;
+  /**
+   * Support page only. "single" runs one agent with every tool and no handoff
+   * (Module 5's comparison); the default is Copper plus the Refund agent.
+   */
+  setup?: "multi" | "single";
 };
 
 export type AskCopperResult = { progress: Live<Progress> };
@@ -45,9 +51,11 @@ export async function askCopper({
   useTools,
   desk,
   agent = "copper",
+  setup = "multi",
 }: AskCopperRequest): Promise<AskCopperResult> {
   const { live, update, done } = createLive<Progress>();
-  const first: Agent = desk && useTools ? agent : "copper";
+  const single = setup === "single" && Boolean(desk) && useTools;
+  const first: Agent = desk && useTools && !single ? agent : "copper";
   const progress: Progress = {
     steps: [],
     reply: "",
@@ -163,8 +171,14 @@ export async function askCopper({
           // shows which agent answered and which tools it used.
           const agent: Agent = current;
           const next: Agent | undefined = await startActiveObservation(
-            `${agent}-agent`,
-            () => follow(agent, agentCall(agent, messages, desk)),
+            single ? "single-agent" : `${agent}-agent`,
+            () =>
+              follow(
+                agent,
+                single && desk
+                  ? singleAgentCall(messages, desk)
+                  : agentCall(agent, messages, desk),
+              ),
             { asType: "agent" },
           );
           if (!next || next === current || handoffs >= MAX_HANDOFFS) break;
