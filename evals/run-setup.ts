@@ -1,6 +1,7 @@
 // Runs the golden set on one setup of the agents and records it in Langfuse
 // as one dataset run: a trace per question, with the AI judge's scores. Used
 // by golden.eval.ts (the CI gate) and compare.eval.ts (one agent vs two).
+import { appendFileSync } from "node:fs";
 import { LangfuseClient } from "@langfuse/client";
 import { GOLDEN_SET } from "@/evals/golden-set";
 import { judge } from "@/evals/judge";
@@ -86,6 +87,7 @@ export async function runGoldenSet(setup: Setup): Promise<SetupResult> {
           // Cost, time and effort, so the setups can be compared on more
           // than quality.
           { name: "tokens", value: output.tokens },
+          { name: "cost_usd", value: Math.round(output.costUsd * 1e6) / 1e6 },
           { name: "seconds", value: Math.round(output.seconds * 10) / 10 },
           { name: "tool_calls", value: output.tools.length },
         ];
@@ -108,10 +110,50 @@ export async function runGoldenSet(setup: Setup): Promise<SetupResult> {
   await flushTraces();
   await langfuse.flush();
   console.info(await result.format());
+  writeJobSummary(setup.name, result.itemResults);
   const rate = result.runEvaluations.find((e) => e.name === "pass_rate");
   return {
     name: setup.name,
     passRate: Number(rate?.value ?? 0),
     url: result.datasetRunUrl,
   };
+}
+
+type Item = {
+  input?: unknown;
+  evaluations: { name: string; value?: unknown; comment?: unknown }[];
+};
+
+const cell = (text: unknown) => String(text ?? "").replaceAll("|", "/");
+
+/**
+ * In GitHub Actions, writes the scores as a table on the check's summary page,
+ * so the pull request shows each question, the judge's verdict and the totals.
+ */
+function writeJobSummary(setup: string, items: Item[]) {
+  const file = process.env.GITHUB_STEP_SUMMARY;
+  if (!file) return;
+  const score = (item: Item, name: string) =>
+    Number(item.evaluations.find((e) => e.name === name)?.value ?? 0);
+  const average = (name: string) =>
+    items.reduce((sum, item) => sum + score(item, name), 0) /
+    Math.max(items.length, 1);
+  const passes = items.filter((item) => score(item, "judge_pass") === 1).length;
+  const percent = Math.round((passes / GOLDEN_SET.length) * 100);
+  const rows = items.map((item) => {
+    const verdict = item.evaluations.find((e) => e.name === "judge_pass");
+    const result = score(item, "judge_pass") ? "pass" : "FAIL";
+    return `| ${cell(item.input)} | ${result} | ${score(item, "judge_score")} | ${cell(verdict?.comment)} |`;
+  });
+  const lines = [
+    `## Golden-set eval: ${setup}`,
+    "",
+    `**${passes} of ${GOLDEN_SET.length} passed (${percent}%).** Per question on average: judge score ${average("judge_score").toFixed(2)} of 5, ${Math.round(average("tokens"))} tokens, $${average("cost_usd").toFixed(5)}, ${average("seconds").toFixed(1)} seconds.`,
+    "",
+    "| Question | Result | Score | Judge's reason |",
+    "| --- | --- | --- | --- |",
+    ...rows,
+    "",
+  ];
+  appendFileSync(file, lines.join("\n"));
 }
